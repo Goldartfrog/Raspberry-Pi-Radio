@@ -11,7 +11,7 @@ func Download(link string, as string) {
 	os.Executable()
 
 	// yt-dlp -f "worstvideo*+worstaudio/worst"
-	cmd := exec.Command("yt-dlp", "--extract-audio", "--audio-format", "m4a", "-o", as, "-x", link)
+	cmd := exec.Command("yt-dlp", "--extract-audio", "--audio-format", "wav", "-o", as, "-x", link)
 	var stdout, stderr bytes.Buffer
 
 	cmd.Stdout = &stdout
