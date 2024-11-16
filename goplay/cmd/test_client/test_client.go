@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -10,7 +11,12 @@ import (
 )
 
 func main() {
-	conn, err := net.Dial("tcp", ":13337")
+	// Find via. ifconfig | grep netmask
+	serverPtr := flag.String("ip", "192.168.86.140", "Local ip address (not global)")
+
+	flag.Parse()
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:13337", *serverPtr))
 	if err != nil {
 		log.Fatalf("Error connecting: %s\n", err.Error())
 	}
