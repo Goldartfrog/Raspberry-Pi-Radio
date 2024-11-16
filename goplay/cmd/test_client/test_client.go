@@ -49,6 +49,6 @@ func main() {
 		fmt.Printf("Link: %s\n", ys.Link)
 
 		download.Download(ys.Link, "output.wav")
-		audio.PlayFile("output.wavs")
+		audio.PlayFile("output.wav")
 	}
 }
