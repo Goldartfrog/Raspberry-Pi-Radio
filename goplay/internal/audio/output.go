@@ -5,8 +5,9 @@ import (
 	"time"
 
 	"github.com/gopxl/beep/v2"
-	"github.com/gopxl/beep/v2/mp3"
+	//"github.com/gopxl/beep/v2/mp3"
 	"github.com/gopxl/beep/v2/speaker"
+	"github.com/gopxl/beep/v2/wav"
 )
 
 func PlayFile(fileName string) error {
@@ -15,7 +16,7 @@ func PlayFile(fileName string) error {
 		return err
 	}
 
-	streamer, format, err := mp3.Decode(f)
+	streamer, format, err := wav.Decode(f)
 	if err != nil {
 		return err
 	}
