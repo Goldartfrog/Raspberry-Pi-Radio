@@ -9,7 +9,7 @@ import json
 class AudioMQTTClient:
     def __init__(self, broker_host, username, password, device_id):
         # Audio configuration - will be set after device selection
-        self.CHUNK = 4096
+        self.CHUNK = 8192  # Increased buffer size for smoother playback
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1
         self.RATE = None  # Will be set based on device capabilities
@@ -42,13 +42,19 @@ class AudioMQTTClient:
         print("\nAvailable Input Devices:")
         input_device_index = None
         
-        # Common sample rates to try
-        COMMON_RATES = [44100, 48000, 32000, 22050, 16000, 8000]
+        # Common sample rates to try, prioritizing higher quality
+        COMMON_RATES = [48000, 44100, 32000, 22050, 16000, 8000]  # Prioritize higher rates
         
         for i in range(self.audio.get_device_count()):
             dev_info = self.audio.get_device_info_by_index(i)
             if dev_info['maxInputChannels'] > 0:  # if it's an input device
                 print(f"Device {i}: {dev_info['name']}")
+                print(f"Default sample rate: {int(dev_info['defaultSampleRate'])} Hz")
+                
+                # Try device's default sample rate first
+                default_rate = int(dev_info['defaultSampleRate'])
+                if default_rate not in COMMON_RATES:
+                    COMMON_RATES.insert(0, default_rate)
                 
                 # Try to find a working sample rate
                 for rate in COMMON_RATES:
@@ -139,7 +145,7 @@ class AudioMQTTClient:
             self.send_message(audio_data)
         
         # Clean up temporary file
-        # os.remove(temp_filename)
+        os.remove(temp_filename)
 
     def send_message(self, audio_data):
         """Send audio message via MQTT"""
@@ -189,17 +195,22 @@ class AudioMQTTClient:
             # Open the audio file
             wf = wave.open(filename, 'rb')
             
-            # Open a stream for playback
+            # Open a stream for playback with larger buffer
             stream = self.audio.open(format=self.audio.get_format_from_width(wf.getsampwidth()),
                                    channels=wf.getnchannels(),
                                    rate=wf.getframerate(),
-                                   output=True)
+                                   output=True,
+                                   frames_per_buffer=self.CHUNK,
+                                   output_device_index=None)  # Use default output
             
-            # Read and play the audio data
+            # Read and play the audio data in chunks
             data = wf.readframes(self.CHUNK)
             while data:
                 stream.write(data)
                 data = wf.readframes(self.CHUNK)
+            
+            # Small delay to prevent cutting off end of audio
+            time.sleep(0.5)
             
             # Clean up
             stream.stop_stream()
