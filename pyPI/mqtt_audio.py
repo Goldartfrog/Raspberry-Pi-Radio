@@ -273,19 +273,20 @@ class MusicCommandHandler:
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': True,  # Don't download, just get info
-                'default_search': 'ytsearch1'  # Search and return first result
             }
             
             with YoutubeDL(ydl_opts) as ydl:
-                result = ydl.extract_info(f"{query} music", download=False)
-                print(result)
-                if not result or 'entries' not in result or not result['entries']:
+                # Need to prefix with ytsearch1: to perform a YouTube search
+                search_query = f"ytsearch1:{query} music"
+                result = ydl.extract_info(search_query, download=False)
+                
+                if not result or 'entries' not in result:
                     return None
                     
                 video = result['entries'][0]
                 return {
                     'title': video['title'],
-                    'url': f"https://youtube.com/watch?v={video['id']}",
+                    'url': video['webpage_url'],
                     'duration': str(video.get('duration', 'unknown'))
                 }
         except Exception as e:
