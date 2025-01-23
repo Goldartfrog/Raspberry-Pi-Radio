@@ -9,6 +9,7 @@ import speech_recognition as sr
 from yt_dlp import YoutubeDL
 import requests
 from youtubesearchpython import VideosSearch
+from pydub import AudioSegment
 
 
 class AudioMQTTClient:
@@ -232,7 +233,7 @@ class AudioMQTTClient:
         self.audio.terminate()
 
 
-class MusicPlayer:
+class MusicCommandHandler:
     def __init__(self, cache_dir="music_cache"):
         self.recognizer = sr.Recognizer()
         self.cache_dir = cache_dir
@@ -267,7 +268,6 @@ class MusicPlayer:
     def search_song(self, query):
         """Search for a song on YouTube"""
         try:
-            # Add "music" to the query to prioritize music results
             search = VideosSearch(f"{query} music", limit=1)
             results = search.result()
             
@@ -284,7 +284,7 @@ class MusicPlayer:
             return None
 
     def download_song(self, url, title):
-        """Download a song from YouTube and return the file path"""
+        """Download and return the path to the downloaded MP3"""
         cache_path = f"{self.cache_dir}/{title}.mp3"
         
         # Check if song is already in cache
@@ -300,78 +300,40 @@ class MusicPlayer:
             print(f"Error downloading song: {e}")
             return None
 
-    def process_music_command(self, wav_file):
-        """Process a voice command to play music"""
-        # First, transcribe the audio
-        text = self.transcribe_audio(wav_file)
-        if not text:
-            return None, "Could not understand audio command"
-            
-        # Check if the command is asking to play music
-        if not any(phrase in text for phrase in ["play", "listen to", "put on"]):
-            return None, "Not a valid music command"
-            
-        # Extract the song query by removing command words
-        for phrase in ["play", "listen to", "put on"]:
-            text = text.replace(phrase, "").strip()
-            
-        # Search for the song
-        result = self.search_song(text)
-        if not result:
-            return None, f"Could not find song matching: {text}"
-            
-        # Download the song
-        file_path = self.download_song(result['url'], result['title'])
-        if not file_path:
-            return None, f"Failed to download: {result['title']}"
-            
-        return {
-            'file_path': file_path,
-            'title': result['title'],
-            'duration': result['duration']
-        }, None
-
 def integrate_with_mqtt_client(audio_mqtt_client):
     """Add music playing capabilities to existing AudioMQTTClient"""
     
-    # Add music player instance
-    audio_mqtt_client.music_player = MusicPlayer()
+    # Add music handler instance
+    audio_mqtt_client.music_handler = MusicCommandHandler()
     
-    # Extend message format to include music commands
+    # Extend message handling for music commands
     original_on_message = audio_mqtt_client.on_message
     
     def new_on_message(client, userdata, msg):
         try:
             message = json.loads(msg.payload)
             
-            # Check if this is a music command
+            # Handle music command messages
             if message.get("type") == "music_command":
-                # Process as music command
-                temp_wav = f"temp_command_{message['device_id']}.wav"
-                
-                # Save audio command to temporary WAV
-                audio_data = bytes.fromhex(message["audio_data"])
-                with wave.open(temp_wav, 'wb') as wf:
-                    wf.setnchannels(audio_mqtt_client.CHANNELS)
-                    wf.setsampwidth(audio_mqtt_client.audio.get_sample_size(audio_mqtt_client.FORMAT))
-                    wf.setframerate(audio_mqtt_client.RATE)
-                    wf.writeframes(audio_data)
-                
-                # Process music command
-                result, error = audio_mqtt_client.music_player.process_music_command(temp_wav)
-                
-                # Clean up temp file
-                os.remove(temp_wav)
-                
-                if error:
-                    print(f"Music command error: {error}")
+                # Skip processing our own messages
+                if message["device_id"] == audio_mqtt_client.device_id:
                     return
                     
-                # Play the music file
-                audio_mqtt_client.play_message(result['file_path'])
+                print(f"\nReceived music request: {message['song_title']}")
+                
+                # Download and play the song
+                file_path = audio_mqtt_client.music_handler.download_song(
+                    message['song_url'],
+                    message['song_title']
+                )
+                
+                if file_path:
+                    audio_mqtt_client.audio_player.play_file(file_path)
+                else:
+                    print("Failed to download song")
                 
             else:
-                # Handle normal voice message
+                # Handle normal voice messages
                 original_on_message(client, userdata, msg)
                 
         except Exception as e:
@@ -380,35 +342,168 @@ def integrate_with_mqtt_client(audio_mqtt_client):
     # Replace original message handler
     audio_mqtt_client.on_message = new_on_message
     
-    # Add method to send music commands
-    def send_music_command(self):
-        """Record and send a music command"""
-        print("Recording music command...")
+    def process_music_command(self):
+        """Record voice command and process it"""
+        print("Recording music command (5 seconds)...")
         
-        # Use existing recording logic but mark as music command
+        # Use existing recording logic
         temp_filename = f"temp_{self.device_id}.wav"
         
-        # Record audio using existing method
-        self.record_message()
+        # Start recording using existing recording method
+        stream = self.audio.open(format=self.FORMAT,
+                               channels=self.CHANNELS,
+                               rate=self.RATE,
+                               input=True,
+                               frames_per_buffer=self.CHUNK)
         
-        # Read the temporary file and send as music command
-        with open(temp_filename, 'rb') as f:
-            audio_data = f.read()
-            message = {
-                "device_id": self.device_id,
-                "timestamp": datetime.now().isoformat(),
-                "type": "music_command",
-                "audio_data": audio_data.hex()
-            }
-            self.mqtt_client.publish("voice_messages", json.dumps(message))
+        frames = []
+        for _ in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
+            try:
+                data = stream.read(self.CHUNK, exception_on_overflow=False)
+                frames.append(data)
+            except IOError as e:
+                print(f"Warning: {e}")
+                continue
         
-        print("Music command sent")
+        print("Finished recording")
+        
+        stream.stop_stream()
+        stream.close()
+        
+        # Save temporary WAV file
+        with wave.open(temp_filename, 'wb') as wf:
+            wf.setnchannels(self.CHANNELS)
+            wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
+            wf.setframerate(self.RATE)
+            wf.writeframes(b''.join(frames))
+        
+        # Process the command
+        text = self.music_handler.transcribe_audio(temp_filename)
+        os.remove(temp_filename)
+        
+        print(text)
+        
+        if not text:
+            print("Could not understand command")
+            return
+            
+        # Extract song request from command
+        for phrase in ["play", "listen to", "put on"]:
+            text = text.replace(phrase, "").strip()
+        
+        # Search for the song
+        result = self.music_handler.search_song(text)
+        if not result:
+            print(f"Could not find song matching: {text}")
+            return
+            
+        # Send music command message
+        message = {
+            "device_id": self.device_id,
+            "timestamp": datetime.now().isoformat(),
+            "type": "music_command",
+            "song_title": result['title'],
+            "song_url": result['url'],
+            "duration": result['duration']
+        }
+        
+        self.mqtt_client.publish("voice_messages", json.dumps(message))
+        print(f"Requested song: {result['title']}")
+        
+        # Download and play on this device too
+        file_path = self.music_handler.download_song(result['url'], result['title'])
+        if file_path:
+            self.audio_player.play_file(file_path)
     
     # Add new method to client
-    audio_mqtt_client.send_music_command = send_music_command.__get__(audio_mqtt_client)
+    audio_mqtt_client.process_music_command = process_music_command.__get__(audio_mqtt_client)
+    
+    
+    
+class AudioPlayer:
+    def __init__(self, audio_instance):
+        self.audio = audio_instance
+        self.CHUNK = 8192
+        
+    def play_file(self, filepath):
+        """Play either MP3 or WAV files"""
+        file_extension = os.path.splitext(filepath)[1].lower()
+        
+        if file_extension == '.wav':
+            self._play_wav(filepath)
+        elif file_extension == '.mp3':
+            self._play_mp3(filepath)
+        else:
+            raise ValueError(f"Unsupported file format: {file_extension}")
+    
+    def _play_wav(self, filepath):
+        """Play a WAV file"""
+        try:
+            wf = wave.open(filepath, 'rb')
+            stream = self.audio.open(
+                format=self.audio.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True,
+                frames_per_buffer=self.CHUNK
+            )
+            
+            data = wf.readframes(self.CHUNK)
+            while data:
+                stream.write(data)
+                data = wf.readframes(self.CHUNK)
+                
+            stream.stop_stream()
+            stream.close()
+            wf.close()
+            
+        except Exception as e:
+            print(f"Error playing WAV file: {e}")
+    
+    def _play_mp3(self, filepath):
+        """Convert MP3 to WAV in memory and play"""
+        try:
+            # Load MP3 using pydub
+            audio = AudioSegment.from_mp3(filepath)
+            
+            # Set up audio stream
+            stream = self.audio.open(
+                format=self.audio.get_format_from_width(audio.sample_width),
+                channels=audio.channels,
+                rate=audio.frame_rate,
+                output=True,
+                frames_per_buffer=self.CHUNK
+            )
+            
+            # Convert to raw audio data
+            # Extract raw audio data as an array of samples
+            samples = audio.raw_data
+            
+            # Play in chunks
+            for i in range(0, len(samples), self.CHUNK * audio.sample_width):
+                chunk = samples[i:i + self.CHUNK * audio.sample_width]
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            
+        except Exception as e:
+            print(f"Error playing MP3 file: {e}")
 
-
-
+def integrate_audio_player(audio_mqtt_client):
+    """Add MP3 playback capability to the MQTT client"""
+    
+    # Create audio player instance
+    audio_mqtt_client.audio_player = AudioPlayer(audio_mqtt_client.audio)
+    
+    # Replace original play_message with new version
+    def new_play_message(self, filepath):
+        """Play either MP3 or WAV files"""
+        self.audio_player.play_file(filepath)
+    
+    # Update the client's play_message method
+    audio_mqtt_client.play_message = new_play_message.__get__(audio_mqtt_client)
+    
 
 # Example usage
 if __name__ == "__main__":
@@ -428,11 +523,11 @@ if __name__ == "__main__":
     
     try:
         while True:
-            command = input("Enter command (record/quit): ").strip().lower()
+            command = input("Enter command (record/music/quit): ").strip().lower()
             if command == 'record':
                 client.record_message()
             if command == 'music':
-                client.send_music_command()
+                client.process_music_command()
             elif command == 'quit':
                 break
     finally:
