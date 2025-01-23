@@ -278,20 +278,13 @@ class MusicCommandHandler:
                 search_query = f"ytsearch1:{query} music"
                 result = ydl.extract_info(search_query, download=False)
                 
-                print("Full result:")  # Debug print
-                print(result)
-                
                 if not result or 'entries' not in result:
-                    print("No entries found in result")  # Debug print
                     return None
                     
                 video = result['entries'][0]
-                print("Video entry:")  # Debug print
-                print(video)
-                
                 return {
                     'title': video.get('title'),
-                    'url': video.get('id', ''),  # Changed to use id
+                    'url': f"https://youtube.com/watch?v={video.get('id', '')}", # Construct full URL
                     'duration': str(video.get('duration', 'unknown'))
                 }
         except Exception as e:
@@ -534,6 +527,7 @@ if __name__ == "__main__":
     
     client = AudioMQTTClient(args.broker, args.username, args.password, args.device_id)
     integrate_with_mqtt_client(client)
+    integrate_audio_player(client)
     client.connect()
     
     try:
