@@ -268,25 +268,30 @@ class MusicCommandHandler:
     def search_song(self, query):
         """Search for a song on YouTube using yt-dlp"""
         try:
-            # Configure yt-dlp for search
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
-                'extract_flat': True,  # Don't download, just get info
+                'extract_flat': True,
             }
             
             with YoutubeDL(ydl_opts) as ydl:
-                # Need to prefix with ytsearch1: to perform a YouTube search
                 search_query = f"ytsearch1:{query} music"
                 result = ydl.extract_info(search_query, download=False)
                 
+                print("Full result:")  # Debug print
+                print(result)
+                
                 if not result or 'entries' not in result:
+                    print("No entries found in result")  # Debug print
                     return None
                     
                 video = result['entries'][0]
+                print("Video entry:")  # Debug print
+                print(video)
+                
                 return {
-                    'title': video['title'],
-                    'url': video['webpage_url'],
+                    'title': video.get('title'),
+                    'url': video.get('id', ''),  # Changed to use id
                     'duration': str(video.get('duration', 'unknown'))
                 }
         except Exception as e:
