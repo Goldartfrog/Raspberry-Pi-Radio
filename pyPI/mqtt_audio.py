@@ -150,7 +150,7 @@ class AudioMQTTClient:
             self.send_message(audio_data)
         
         # Clean up temporary file
-        os.remove(temp_filename)
+        # os.remove(temp_filename)
 
     def send_message(self, audio_data):
         """Send audio message via MQTT"""
