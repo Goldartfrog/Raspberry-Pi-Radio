@@ -278,7 +278,7 @@ class MusicCommandHandler:
             
             with YoutubeDL(ydl_opts) as ydl:
                 result = ydl.extract_info(f"{query} music", download=False)
-                
+                print(result)
                 if not result or 'entries' not in result or not result['entries']:
                     return None
                     
