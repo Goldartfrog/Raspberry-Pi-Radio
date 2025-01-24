@@ -10,6 +10,7 @@ from yt_dlp import YoutubeDL
 import requests
 from youtubesearchpython import VideosSearch
 from pydub import AudioSegment
+import subprocess
 
 
 class AudioMQTTClient:
@@ -435,17 +436,20 @@ class AudioPlayer:
         
     def play_file(self, filepath):
         """Play either MP3 or WAV files"""
+        # Get absolute path
+        abs_path = os.path.abspath(filepath)
+        
         file_extension = os.path.splitext(filepath)[1].lower()
         
         if file_extension == '.wav':
-            self._play_wav(filepath)
+            self._play_wav(abs_path)
         elif file_extension == '.mp3':
-            self._play_mp3(filepath)
+            self._play_mp3(abs_path)
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
     
     def _play_wav(self, filepath):
-        """Play a WAV file"""
+        """Play a WAV file using PyAudio"""
         try:
             wf = wave.open(filepath, 'rb')
             stream = self.audio.open(
@@ -469,33 +473,17 @@ class AudioPlayer:
             print(f"Error playing WAV file: {e}")
     
     def _play_mp3(self, filepath):
-        """Convert MP3 to WAV in memory and play"""
+        """Play MP3 using ffplay"""
         try:
-            # Load MP3 using pydub
-            audio = AudioSegment.from_mp3(filepath)
-            
-            # Set up audio stream
-            stream = self.audio.open(
-                format=self.audio.get_format_from_width(audio.sample_width),
-                channels=audio.channels,
-                rate=audio.frame_rate,
-                output=True,
-                frames_per_buffer=self.CHUNK
-            )
-            
-            # Convert to raw audio data
-            # Extract raw audio data as an array of samples
-            samples = audio.raw_data
-            
-            # Play in chunks
-            for i in range(0, len(samples), self.CHUNK * audio.sample_width):
-                chunk = samples[i:i + self.CHUNK * audio.sample_width]
-                stream.write(chunk)
-            
-            stream.stop_stream()
-            stream.close()
-            
-        except Exception as e:
+            # Use ffplay with minimal output and autoexit
+            subprocess.run([
+                'ffplay', 
+                '-nodisp',     # No video display
+                '-autoexit',   # Exit when done playing
+                '-loglevel', 'quiet',  # Minimal logging
+                filepath
+            ], check=True)
+        except subprocess.CalledProcessError as e:
             print(f"Error playing MP3 file: {e}")
 
 def integrate_audio_player(audio_mqtt_client):
