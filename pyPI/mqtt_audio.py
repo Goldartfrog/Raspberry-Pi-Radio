@@ -480,7 +480,6 @@ class AudioPlayer:
                 'ffplay', 
                 '-nodisp',     # No video display
                 '-autoexit',   # Exit when done playing
-                '-loglevel', 'quiet',  # Minimal logging
                 filepath
             ], check=True)
         except subprocess.CalledProcessError as e:
