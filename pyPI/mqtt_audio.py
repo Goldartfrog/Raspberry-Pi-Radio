@@ -388,9 +388,13 @@ class AudioPlayer:
     def __init__(self, audio_instance):
         self.audio = audio_instance
         self.CHUNK = 8192
+        self.current_process = None  # Track current ffplay process
         
     def play_file(self, filepath):
         """Play either MP3 or WAV files"""
+        # Stop any currently playing audio
+        self.stop()
+        
         # Get absolute path
         abs_path = os.path.abspath(filepath)
         
@@ -428,21 +432,36 @@ class AudioPlayer:
             print(f"Error playing WAV file: {e}")
     
     def _play_mp3(self, filepath):
-        """Play MP3 using ffplay"""
+        """Play MP3 using ffplay with process tracking"""
         try:
-            # Use ffplay with minimal output and autoexit
-            subprocess.run([
+            # Start ffplay with minimal output and autoexit
+            self.current_process = subprocess.Popen([
                 'ffplay', 
                 '-nodisp',     # No video display
                 '-autoexit',   # Exit when done playing
+                '-loglevel', 'quiet',  # Minimal logging
                 filepath
-            ], check=True)
+            ])
+            print("Music playback started. Type 'stop' to stop playback.")
         except subprocess.CalledProcessError as e:
             print(f"Error playing MP3 file: {e}")
+            self.current_process = None
+    
+    def stop(self):
+        """Stop current playback"""
+        if self.current_process and self.current_process.poll() is None:
+            # Process is still running, terminate it
+            self.current_process.terminate()
+            self.current_process.wait()  # Wait for process to finish
+            self.current_process = None
+            print("Playback stopped.")
+        
+    def is_playing(self):
+        """Check if audio is currently playing"""
+        return self.current_process and self.current_process.poll() is None
 
     
 
-# Example usage
 if __name__ == "__main__":
     import argparse
     
@@ -457,14 +476,23 @@ if __name__ == "__main__":
     client = AudioMQTTClient(args.broker, args.username, args.password, args.device_id)
     client.connect()
     
+    print("Available commands:")
+    print("  record - Record a voice message")
+    print("  music  - Record a music request")
+    print("  stop   - Stop current music playback")
+    print("  quit   - Exit the program")
+    
     try:
         while True:
-            command = input("Enter command (record/music/quit): ").strip().lower()
+            command = input("\nEnter command (record/music/stop/quit): ").strip().lower()
             if command == 'record':
                 client.record_message()
-            if command == 'music':
+            elif command == 'music':
                 client.process_music_command()
+            elif command == 'stop':
+                client.audio_player.stop()
             elif command == 'quit':
+                client.audio_player.stop()  # Stop any playing audio before quitting
                 break
     finally:
         client.cleanup()
