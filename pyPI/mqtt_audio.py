@@ -292,23 +292,20 @@ class MusicCommandHandler:
             print(f"Error searching for song: {e}")
             return None
 
-    def download_song(self, url, title):
+    def download_song(self, url, title, original_query):
         """Download and return the path to the downloaded MP3"""
-        # Sanitize the filename - replace special chars with standard ones
-        safe_title = title.replace('⧸', '-').replace('/', '-')
-        # Further sanitize by removing or replacing other potentially problematic characters
-        safe_title = ''.join(c for c in safe_title if c.isprintable() and c not in '<>:"/\\|?*')
-        
-        cache_path = f"{self.cache_dir}/{safe_title}.mp3"
+        # Create filename from the original search query
+        safe_filename = original_query.replace(' ', '_').lower()
+        cache_path = f"{self.cache_dir}/{safe_filename}.mp3"
         
         # Check if song is already in cache
         if os.path.exists(cache_path):
-            print(f"Found {safe_title} in cache")
+            print(f"Found {safe_filename} in cache")
             return cache_path
             
         try:
-            # Update ydl_opts to use the sanitized filename
-            self.ydl_opts['outtmpl'] = f"{self.cache_dir}/{safe_title}.%(ext)s"
+            # Update ydl_opts to use our simple filename
+            self.ydl_opts['outtmpl'] = f"{self.cache_dir}/{safe_filename}.%(ext)s"
             
             with YoutubeDL(self.ydl_opts) as ydl:
                 ydl.download([url])
@@ -400,6 +397,9 @@ def integrate_with_mqtt_client(audio_mqtt_client):
         
         print(text)
         
+        for phrase in ["play", "listen to", "put on"]:
+            text = text.replace(phrase, "").strip()
+        
         if not text:
             print("Could not understand command")
             return
@@ -428,7 +428,7 @@ def integrate_with_mqtt_client(audio_mqtt_client):
         print(f"Requested song: {result['title']}")
         
         # Download and play on this device too
-        file_path = self.music_handler.download_song(result['url'], result['title'])
+        file_path = self.music_handler.download_song(result['url'], result['title'], text)
         if file_path:
             self.audio_player.play_file(file_path)
     
