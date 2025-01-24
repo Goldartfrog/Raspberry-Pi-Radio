@@ -294,14 +294,22 @@ class MusicCommandHandler:
 
     def download_song(self, url, title):
         """Download and return the path to the downloaded MP3"""
-        cache_path = f"{self.cache_dir}/{title}.mp3"
+        # Sanitize the filename - replace special chars with standard ones
+        safe_title = title.replace('⧸', '-').replace('/', '-')
+        # Further sanitize by removing or replacing other potentially problematic characters
+        safe_title = ''.join(c for c in safe_title if c.isprintable() and c not in '<>:"/\\|?*')
+        
+        cache_path = f"{self.cache_dir}/{safe_title}.mp3"
         
         # Check if song is already in cache
         if os.path.exists(cache_path):
-            print(f"Found {title} in cache")
+            print(f"Found {safe_title} in cache")
             return cache_path
             
         try:
+            # Update ydl_opts to use the sanitized filename
+            self.ydl_opts['outtmpl'] = f"{self.cache_dir}/{safe_title}.%(ext)s"
+            
             with YoutubeDL(self.ydl_opts) as ydl:
                 ydl.download([url])
             return cache_path
