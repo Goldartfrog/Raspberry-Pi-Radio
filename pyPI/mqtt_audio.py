@@ -40,6 +40,9 @@ class AudioMQTTClient:
         self.mqtt_client.on_connect = self.on_connect
         self.mqtt_client.on_message = self.on_message
         
+        self.music_handler = MusicCommandHandler()
+        self.audio_player = AudioPlayer(self.audio)
+        
         # Create messages directory if it doesn't exist
         self.messages_dir = "received_messages"
         os.makedirs(self.messages_dir, exist_ok=True)
@@ -168,7 +171,7 @@ class AudioMQTTClient:
         print("Message sent")
 
     def on_message(self, client, userdata, msg):
-        """Handle received messages"""
+        """Unified message handler for both voice messages and music commands"""
         try:
             # Parse message
             message = json.loads(msg.payload)
@@ -177,61 +180,127 @@ class AudioMQTTClient:
             if message["device_id"] == self.device_id:
                 return
                 
-            # Convert hex string back to bytes
-            audio_data = bytes.fromhex(message["audio_data"])
+            # Handle different message types
+            message_type = message.get("type", "voice")  # Default to voice message if type not specified
             
-            # Save message to file
-            timestamp = datetime.fromisoformat(message["timestamp"]).strftime("%Y%m%d_%H%M%S")
-            filename = f"{self.messages_dir}/msg_{message['device_id']}_{timestamp}.wav"
-            
-            with wave.open(filename, 'wb') as wf:
-                wf.setnchannels(self.CHANNELS)
-                wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
-                wf.setframerate(self.RATE)
-                wf.writeframes(audio_data)
-            
-            print(f"Received message from {message['device_id']}, saved as {filename}")
-            self.play_message(filename)
-            
+            if message_type == "music_command":
+                print(f"\nReceived music request: {message['song_title']}")
+                
+                # Download and play the song
+                file_path = self.music_handler.download_song(
+                    message['song_url'],
+                    message['song_title'],
+                    message['song_title']  # Using title as query for consistent filenames
+                )
+                
+                if file_path:
+                    print(f"Playing song: {message['song_title']}")
+                    self.audio_player.play_file(file_path)
+                else:
+                    print("Failed to download song")
+                    
+            else:  # Handle voice messages
+                # Convert hex string back to bytes
+                audio_data = bytes.fromhex(message["audio_data"])
+                
+                # Save message to file
+                timestamp = datetime.fromisoformat(message["timestamp"]).strftime("%Y%m%d_%H%M%S")
+                filename = f"{self.messages_dir}/msg_{message['device_id']}_{timestamp}.wav"
+                
+                with wave.open(filename, 'wb') as wf:
+                    wf.setnchannels(self.CHANNELS)
+                    wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
+                    wf.setframerate(self.RATE)
+                    wf.writeframes(audio_data)
+                
+                print(f"Received voice message from {message['device_id']}, saved as {filename}")
+                self.play_message(filename)
+                
         except Exception as e:
             print(f"Error processing message: {e}")
+            import traceback
+            print(traceback.format_exc())
 
-    def play_message(self, filename):
-        """Play an audio message"""
-        try:
-            # Open the audio file
-            wf = wave.open(filename, 'rb')
-            
-            # Open a stream for playback with larger buffer
-            stream = self.audio.open(format=self.audio.get_format_from_width(wf.getsampwidth()),
-                                   channels=wf.getnchannels(),
-                                   rate=wf.getframerate(),
-                                   output=True,
-                                   frames_per_buffer=self.CHUNK,
-                                   output_device_index=None)  # Use default output
-            
-            # Read and play the audio data in chunks
-            data = wf.readframes(self.CHUNK)
-            while data:
-                stream.write(data)
-                data = wf.readframes(self.CHUNK)
-            
-            # Small delay to prevent cutting off end of audio
-            time.sleep(0.5)
-            
-            # Clean up
-            stream.stop_stream()
-            stream.close()
-            wf.close()
-            
-        except Exception as e:
-            print(f"Error playing message: {e}")
+    def play_message(self, filepath):
+        """Play audio file using the audio player"""
+        self.audio_player.play_file(filepath)
 
     def cleanup(self):
         """Clean up resources"""
         self.mqtt_client.loop_stop()
         self.mqtt_client.disconnect()
         self.audio.terminate()
+        
+    def process_music_command(self):
+        """Record and process a music command"""
+        print("Recording music command (5 seconds)...")
+        
+        # Use existing recording logic
+        temp_filename = f"temp_{self.device_id}.wav"
+        
+        # Start recording using existing recording method
+        stream = self.audio.open(format=self.FORMAT,
+                            channels=self.CHANNELS,
+                            rate=self.RATE,
+                            input=True,
+                            frames_per_buffer=self.CHUNK)
+        
+        frames = []
+        for _ in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
+            try:
+                data = stream.read(self.CHUNK, exception_on_overflow=False)
+                frames.append(data)
+            except IOError as e:
+                print(f"Warning: {e}")
+                continue
+        
+        print("Finished recording")
+        
+        stream.stop_stream()
+        stream.close()
+        
+        # Save temporary WAV file
+        with wave.open(temp_filename, 'wb') as wf:
+            wf.setnchannels(self.CHANNELS)
+            wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
+            wf.setframerate(self.RATE)
+            wf.writeframes(b''.join(frames))
+        
+        # Process the command
+        text = self.music_handler.transcribe_audio(temp_filename)
+        os.remove(temp_filename)
+        
+        if not text:
+            print("Could not understand command")
+            return
+            
+        # Extract song request from command
+        for phrase in ["play", "listen to", "put on"]:
+            text = text.replace(phrase, "").strip()
+        
+        # Search for the song
+        result = self.music_handler.search_song(text)
+        if not result:
+            print(f"Could not find song matching: {text}")
+            return
+            
+        # Send music command message
+        message = {
+            "device_id": self.device_id,
+            "timestamp": datetime.now().isoformat(),
+            "type": "music_command",
+            "song_title": result['title'],
+            "song_url": result['url'],
+            "duration": result['duration']
+        }
+        
+        self.mqtt_client.publish("voice_messages", json.dumps(message))
+        print(f"Requested song: {result['title']}")
+        
+        # Download and play on this device too
+        file_path = self.music_handler.download_song(result['url'], result['title'], text)
+        if file_path:
+            self.audio_player.play_file(file_path)
 
 
 class MusicCommandHandler:
@@ -314,150 +383,6 @@ class MusicCommandHandler:
             print(f"Error downloading song: {e}")
             return None
 
-def integrate_with_mqtt_client(audio_mqtt_client):
-    """Add music playing capabilities to existing AudioMQTTClient"""
-    
-    # Add music handler instance
-    audio_mqtt_client.music_handler = MusicCommandHandler()
-    
-    # Extend message handling for music commands
-    original_on_message = audio_mqtt_client.on_message
-    
-    def new_on_message(client, userdata, msg):
-        """Handle received messages - both voice and music commands"""
-        try:
-            # Parse message
-            message = json.loads(msg.payload)
-            
-            # Skip messages from self
-            if message["device_id"] == audio_mqtt_client.device_id:
-                return
-                
-            # Handle different message types
-            message_type = message.get("type", "voice")  # Default to voice message if type not specified
-            
-            if message_type == "music_command":
-                print(f"\nReceived music request: {message['song_title']}")
-                
-                # Download and play the song
-                file_path = audio_mqtt_client.music_handler.download_song(
-                    message['song_url'],
-                    message['song_title'],
-                    message['song_title']  # Using title as query for consistent filenames
-                )
-                
-                if file_path:
-                    print(f"Playing song: {message['song_title']}")
-                    audio_mqtt_client.audio_player.play_file(file_path)
-                else:
-                    print("Failed to download song")
-                    
-            else:  # Handle voice messages
-                # Convert hex string back to bytes
-                audio_data = bytes.fromhex(message["audio_data"])
-                
-                # Save message to file
-                timestamp = datetime.fromisoformat(message["timestamp"]).strftime("%Y%m%d_%H%M%S")
-                filename = f"{audio_mqtt_client.messages_dir}/msg_{message['device_id']}_{timestamp}.wav"
-                
-                with wave.open(filename, 'wb') as wf:
-                    wf.setnchannels(audio_mqtt_client.CHANNELS)
-                    wf.setsampwidth(audio_mqtt_client.audio.get_sample_size(audio_mqtt_client.FORMAT))
-                    wf.setframerate(audio_mqtt_client.RATE)
-                    wf.writeframes(audio_data)
-                
-                print(f"Received voice message from {message['device_id']}, saved as {filename}")
-                audio_mqtt_client.play_message(filename)
-            
-        except Exception as e:
-            print(f"Error processing message: {e}")
-            # Add more detailed error information for debugging
-            import traceback
-            print(traceback.format_exc())
-    
-    # Replace original message handler
-    audio_mqtt_client.on_message = new_on_message
-    
-    def process_music_command(self):
-        """Record voice command and process it"""
-        print("Recording music command (5 seconds)...")
-        
-        # Use existing recording logic
-        temp_filename = f"temp_{self.device_id}.wav"
-        
-        # Start recording using existing recording method
-        stream = self.audio.open(format=self.FORMAT,
-                               channels=self.CHANNELS,
-                               rate=self.RATE,
-                               input=True,
-                               frames_per_buffer=self.CHUNK)
-        
-        frames = []
-        for _ in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
-            try:
-                data = stream.read(self.CHUNK, exception_on_overflow=False)
-                frames.append(data)
-            except IOError as e:
-                print(f"Warning: {e}")
-                continue
-        
-        print("Finished recording")
-        
-        stream.stop_stream()
-        stream.close()
-        
-        # Save temporary WAV file
-        with wave.open(temp_filename, 'wb') as wf:
-            wf.setnchannels(self.CHANNELS)
-            wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
-            wf.setframerate(self.RATE)
-            wf.writeframes(b''.join(frames))
-        
-        # Process the command
-        text = self.music_handler.transcribe_audio(temp_filename)
-        os.remove(temp_filename)
-        
-        print(text)
-        
-        for phrase in ["play", "listen to", "put on"]:
-            text = text.replace(phrase, "").strip()
-        
-        if not text:
-            print("Could not understand command")
-            return
-            
-        # Extract song request from command
-        for phrase in ["play", "listen to", "put on"]:
-            text = text.replace(phrase, "").strip()
-        
-        # Search for the song
-        result = self.music_handler.search_song(text)
-        if not result:
-            print(f"Could not find song matching: {text}")
-            return
-            
-        # Send music command message
-        message = {
-            "device_id": self.device_id,
-            "timestamp": datetime.now().isoformat(),
-            "type": "music_command",
-            "song_title": result['title'],
-            "song_url": result['url'],
-            "duration": result['duration']
-        }
-        
-        self.mqtt_client.publish("voice_messages", json.dumps(message))
-        print(f"Requested song: {result['title']}")
-        
-        # Download and play on this device too
-        file_path = self.music_handler.download_song(result['url'], result['title'], text)
-        if file_path:
-            self.audio_player.play_file(file_path)
-    
-    # Add new method to client
-    audio_mqtt_client.process_music_command = process_music_command.__get__(audio_mqtt_client)
-    
-    
     
 class AudioPlayer:
     def __init__(self, audio_instance):
@@ -515,19 +440,6 @@ class AudioPlayer:
         except subprocess.CalledProcessError as e:
             print(f"Error playing MP3 file: {e}")
 
-def integrate_audio_player(audio_mqtt_client):
-    """Add MP3 playback capability to the MQTT client"""
-    
-    # Create audio player instance
-    audio_mqtt_client.audio_player = AudioPlayer(audio_mqtt_client.audio)
-    
-    # Replace original play_message with new version
-    def new_play_message(self, filepath):
-        """Play either MP3 or WAV files"""
-        self.audio_player.play_file(filepath)
-    
-    # Update the client's play_message method
-    audio_mqtt_client.play_message = new_play_message.__get__(audio_mqtt_client)
     
 
 # Example usage
@@ -543,8 +455,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     client = AudioMQTTClient(args.broker, args.username, args.password, args.device_id)
-    integrate_with_mqtt_client(client)
-    integrate_audio_player(client)
     client.connect()
     
     try:
