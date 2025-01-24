@@ -324,34 +324,56 @@ def integrate_with_mqtt_client(audio_mqtt_client):
     original_on_message = audio_mqtt_client.on_message
     
     def new_on_message(client, userdata, msg):
+        """Handle received messages - both voice and music commands"""
         try:
+            # Parse message
             message = json.loads(msg.payload)
             
-            # Handle music command messages
-            if message.get("type") == "music_command":
-                # Skip processing our own messages
-                if message["device_id"] == audio_mqtt_client.device_id:
-                    return
-                    
+            # Skip messages from self
+            if message["device_id"] == audio_mqtt_client.device_id:
+                return
+                
+            # Handle different message types
+            message_type = message.get("type", "voice")  # Default to voice message if type not specified
+            
+            if message_type == "music_command":
                 print(f"\nReceived music request: {message['song_title']}")
                 
                 # Download and play the song
                 file_path = audio_mqtt_client.music_handler.download_song(
                     message['song_url'],
-                    message['song_title']
+                    message['song_title'],
+                    message['song_title']  # Using title as query for consistent filenames
                 )
                 
                 if file_path:
+                    print(f"Playing song: {message['song_title']}")
                     audio_mqtt_client.audio_player.play_file(file_path)
                 else:
                     print("Failed to download song")
+                    
+            else:  # Handle voice messages
+                # Convert hex string back to bytes
+                audio_data = bytes.fromhex(message["audio_data"])
                 
-            else:
-                # Handle normal voice messages
-                original_on_message(client, userdata, msg)
+                # Save message to file
+                timestamp = datetime.fromisoformat(message["timestamp"]).strftime("%Y%m%d_%H%M%S")
+                filename = f"{audio_mqtt_client.messages_dir}/msg_{message['device_id']}_{timestamp}.wav"
                 
+                with wave.open(filename, 'wb') as wf:
+                    wf.setnchannels(audio_mqtt_client.CHANNELS)
+                    wf.setsampwidth(audio_mqtt_client.audio.get_sample_size(audio_mqtt_client.FORMAT))
+                    wf.setframerate(audio_mqtt_client.RATE)
+                    wf.writeframes(audio_data)
+                
+                print(f"Received voice message from {message['device_id']}, saved as {filename}")
+                audio_mqtt_client.play_message(filename)
+            
         except Exception as e:
             print(f"Error processing message: {e}")
+            # Add more detailed error information for debugging
+            import traceback
+            print(traceback.format_exc())
     
     # Replace original message handler
     audio_mqtt_client.on_message = new_on_message
